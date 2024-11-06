@@ -3,6 +3,7 @@ from flask import Flask, request, jsonify, send_from_directory, url_for
 import os
 import subprocess
 import shutil
+import requests
 from dotenv import load_dotenv
 from openai import OpenAI  # Переконайтесь, що використовуєте правильний клієнт OpenAI
 
@@ -69,8 +70,9 @@ def describe_video(frames_folder, audio_path, video_id, system_prompt=None):
                 file=audio_file
             )
             transcription_text = transcription.text
-    except Exception:
-        return {"error": "Audio transcription failed"}
+    except Exception as e:
+        print(f"Помилка транскрипції аудіо: {e}")
+        return {"error": "Audio transcription failed", "details": str(e)}
 
     # Отримання URL кадрів за допомогою BASE_URL
     frame_urls = []
@@ -110,8 +112,10 @@ def describe_video(frames_folder, audio_path, video_id, system_prompt=None):
         )
         description = response.choices[0].message.content
         return {"description": description, "transcription": transcription_text}
-    except Exception:
-        return {"error": "Video description failed"}
+    except Exception as e:
+        print(f"Помилка отримання опису відео: {e}")
+        return {"error": "Video description failed", "details": str(e)}
+
 
 # Функція для очищення папок
 def clear_folders():
@@ -126,40 +130,48 @@ def clear_folders():
             except Exception as e:
                 print(f'Failed to delete {file_path}. Reason: {e}')
 
-# Маршрут для приймання відеофайлу
+# Маршрут для приймання посилання на відеофайл
 @app.route('/upload', methods=['POST'])
 def upload_video():
-    # Отримуємо відеофайл та ключі
-    file = request.files.get('file') or request.files.get('File')
-    video_id = request.form.get('video_id')
-    frame_interval = request.form.get('frame_interval', type=int, default=2)
-    system_prompt = request.form.get('system_prompt')
-    
-    if not file or not video_id:
-        return jsonify({'error': 'File or video_id not provided'}), 400
+    try:
+        # Отримуємо посилання на відеофайл та ключі
+        video_url = request.form.get('video_url')
+        video_id = request.form.get('video_id')
+        frame_interval = request.form.get('frame_interval', type=int, default=2)
+        system_prompt = request.form.get('system_prompt')
+        
+        if not video_url or not video_id:
+            return jsonify({'error': 'Video URL or video_id not provided'}), 400
 
-    # Зберігаємо відеофайл з назвою, що відповідає video_id
-    video_path = os.path.join(UPLOAD_FOLDER, f'{video_id}.mp4')
-    file.save(video_path)
+        # Завантажуємо відеофайл за допомогою URL
+        response = requests.get(video_url, stream=True)
+        response.raise_for_status()
+        
+        # Зберігаємо відеофайл з назвою, що відповідає video_id
+        video_path = os.path.join(UPLOAD_FOLDER, f'{video_id}.mp4')
+        with open(video_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
 
-    # Вилучаємо кадри та аудіо з відео
-    audio_path = extract_frames_and_audio(video_path, video_id, interval=frame_interval, max_frames=100)
-    if not audio_path:
-        return jsonify({'error': 'Failed to process video'}), 500
+        # Вилучаємо кадри та аудіо з відео
+        audio_path = extract_frames_and_audio(video_path, video_id, interval=frame_interval, max_frames=100)
+        if not audio_path:
+            return jsonify({'error': 'Failed to process video'}), 500
 
-    # Описуємо відео за допомогою OpenAI
-    description_result = describe_video(FRAMES_FOLDER, audio_path, video_id, system_prompt)
-    if 'error' in description_result:
-        return jsonify(description_result), 500
+        # Описуємо відео за допомогою OpenAI
+        description_result = describe_video(FRAMES_FOLDER, audio_path, video_id, system_prompt)
+        if 'error' in description_result:
+            return jsonify(description_result), 500
 
-    response = {
-        'status': 'Processed successfully',
-        'transcription': description_result['transcription'],
-        'description': description_result['description']
-    }
-
-    # Очищення папок після виконання скрипта
-    clear_folders()
+        response = {
+            'status': 'Processed successfully',
+            'transcription': description_result['transcription'],
+            'description': description_result['description']
+        }
+    finally:
+        # Очищення папок після виконання скрипта, незалежно від результату
+        clear_folders()
 
     return jsonify(response)
 
