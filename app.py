@@ -24,7 +24,7 @@ os.makedirs(FRAMES_FOLDER, exist_ok=True)
 os.makedirs(AUDIO_FOLDER, exist_ok=True)
 
 # Get the base URL from the environment variable or set a default value
-BASE_URL = os.environ.get('BASE_URL', 'http://192.168.31.95:5001').rstrip('/')
+BASE_URL = os.environ.get('BASE_URL').rstrip('/')
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))  # Ensure you have set OPENAI_API_KEY
