@@ -83,25 +83,56 @@ This endpoint accepts a video URL and processes it.
 #### Parameters:
 
 - `video_url` (string): The URL of the video file to be processed.
-- `video_id` (string, optional): A unique identifier for the video. If not provided, default filenames are used (`video.mp4`, `audio.mp3`, `frame_0001.jpg`).
-- `frame_interval` (integer, optional): Interval in seconds for extracting frames. The default is 2 seconds.
+- `video_id` (string, optional): A unique identifier for the video. If not provided, defaults to 'video'.
 - `system_prompt` (string, optional): A custom system prompt for generating video descriptions using OpenAI.
+- `min_duration` (float, optional): Minimum video duration in seconds required for description generation. Default: 5 seconds.
+- `min_words` (integer, optional): Minimum word count in transcription required for description generation. Default: 5 words.
+- `max_frames` (integer, optional): Maximum number of frames to extract from the video. Default: 10 frames.
+
+#### Frame Extraction Logic:
+
+The API automatically determines frame extraction intervals based on video duration:
+- Videos ≤30 seconds: 5-second interval
+- Videos 31-60 seconds: 10-second interval
+- Videos >60 seconds: 20-second interval
 
 #### Example Request:
 
 ```sh
-curl -X POST http://localhost:5001/upload
--F "video_url=https://example.com/sample_video.mp4" 
--F "video_id=my_video" 
+curl -X POST http://localhost:5001/upload \
+-F "video_url=https://example.com/sample_video.mp4" \
+-F "video_id=my_video" \
+-F "min_duration=10" \
+-F "min_words=10" \
+-F "max_frames=8"
 ```
 
-#### Example Response:
+#### Example Responses:
 
+Successful processing:
 ```json
 {
   "status": "Processed successfully",
   "transcription": "Transcription of the audio",
   "description": "Description generated from video frames"
+}
+```
+
+Duration limitation:
+```json
+{
+  "status": "Processed with limitations",
+  "description": "Video duration (3.5s) is less than minimum required duration (5s)",
+  "transcription": "Transcription of the audio"
+}
+```
+
+Word count limitation:
+```json
+{
+  "status": "Processed with limitations",
+  "description": "Transcription word count (3) is less than minimum required words (5)",
+  "transcription": "Transcription of the audio"
 }
 ```
 

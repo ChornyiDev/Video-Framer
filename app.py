@@ -30,11 +30,30 @@ BASE_URL = os.environ.get('BASE_URL').rstrip('/')
 client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))  # Ensure you have set OPENAI_API_KEY
 
 # Function to extract frames and audio from video
-def extract_frames_and_audio(video_path, video_id, interval=2, max_frames=100):
+def extract_frames_and_audio(video_path, video_id, max_frames=10):
+    # Get video duration using ffprobe
+    duration_command = [
+        'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1', video_path
+    ]
+    try:
+        duration = float(subprocess.check_output(duration_command).decode('utf-8').strip())
+        
+        # Determine frame interval based on duration
+        if duration <= 30:
+            interval = 5
+        elif duration <= 60:
+            interval = 10
+        else:
+            interval = 20
+            
+    except subprocess.CalledProcessError:
+        return None
+
     # Extract frames
-    output_pattern = os.path.join(FRAMES_FOLDER, 'frame_%04d.jpg') if video_id == 'video' else os.path.join(FRAMES_FOLDER, f'{video_id}_frame_%04d.jpg')  # Save frames in JPEG format for smaller size
+    output_pattern = os.path.join(FRAMES_FOLDER, 'frame_%04d.jpg') if video_id == 'video' else os.path.join(FRAMES_FOLDER, f'{video_id}_frame_%04d.jpg')
     frame_command = [
-        'ffmpeg', '-i', video_path, '-vf', f'fps=1/{interval}', '-q:v', '9', output_pattern  # Use -q:v to set quality
+        'ffmpeg', '-i', video_path, '-vf', f'fps=1/{interval}', '-q:v', '9', output_pattern
     ]
     try:
         subprocess.run(frame_command, check=True)
@@ -94,13 +113,16 @@ def describe_video(frames_folder, audio_path, video_id, system_prompt=None):
         {
             "role": "user",
             "content": [
-                {
+                "Here is the audio transcription from the video:",
+                transcription_text,
+                "And here are the frames from the video:",
+                *[{
                     "type": "image_url",
                     "image_url": {
                         "url": frame_url,
                         "detail": "low"
                     }
-                } for frame_url in frame_urls
+                } for frame_url in frame_urls]
             ]
         }
     ]
@@ -134,43 +156,81 @@ def clear_folders():
 @app.route('/upload', methods=['POST'])
 def upload_video():
     try:
-        # Get video URL and other parameters
+        # Get video URL and parameters
         video_url = request.form.get('video_url')
         video_id = request.form.get('video_id') or 'video'
-        frame_interval = request.form.get('frame_interval', type=int, default=2)
         system_prompt = request.form.get('system_prompt')
+        min_duration = float(request.form.get('min_duration', 5))  # Default 5 seconds
+        min_words = int(request.form.get('min_words', 5))  # Default 5 words
+        max_frames = int(request.form.get('max_frames', 10))  # Default 10 frames
         
         if not video_url or not video_id:
             return jsonify({'error': 'Video URL or video_id not provided'}), 400
 
-        # Download video from URL
+        # Download video and get duration
         response = requests.get(video_url, stream=True)
         response.raise_for_status()
         
-        # Save video with the name corresponding to video_id
         video_path = os.path.join(UPLOAD_FOLDER, 'video.mp4') if video_id == 'video' else os.path.join(UPLOAD_FOLDER, f'{video_id}.mp4')
         with open(video_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
 
-        # Extract frames and audio from video
-        audio_path = extract_frames_and_audio(video_path, video_id, interval=frame_interval, max_frames=100)
+        # Check video duration
+        duration_command = [
+            'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1', video_path
+        ]
+        try:
+            duration = float(subprocess.check_output(duration_command).decode('utf-8').strip())
+        except subprocess.CalledProcessError:
+            return jsonify({'error': 'Failed to process video duration'}), 500
+
+        # Extract frames and audio with custom max_frames
+        audio_path = extract_frames_and_audio(video_path, video_id, max_frames=max_frames)
         if not audio_path:
             return jsonify({'error': 'Failed to process video'}), 500
 
-        # Get video description using OpenAI
+        # Always get transcription
+        try:
+            with open(audio_path, "rb") as audio_file:
+                transcription = client.audio.transcriptions.create(
+                    model="whisper-1", 
+                    file=audio_file
+                )
+                transcription_text = transcription.text
+                word_count = len(transcription_text.split())
+        except Exception as e:
+            return jsonify({'error': 'Failed to transcribe audio', 'details': str(e)}), 500
+
+        # Check conditions for video description
+        if duration < min_duration:
+            return jsonify({
+                'status': 'Processed with limitations',
+                'description': f'Video duration ({duration:.1f}s) is less than minimum required duration ({min_duration}s)',
+                'transcription': transcription_text
+            })
+
+        if word_count < min_words:
+            return jsonify({
+                'status': 'Processed with limitations',
+                'description': f'Transcription word count ({word_count}) is less than minimum required words ({min_words})',
+                'transcription': transcription_text
+            })
+
+        # Get video description using OpenAI only if all conditions are met
         description_result = describe_video(FRAMES_FOLDER, audio_path, video_id, system_prompt)
         if 'error' in description_result:
             return jsonify(description_result), 500
 
         response = {
             'status': 'Processed successfully',
-            'transcription': description_result['transcription'],
+            'transcription': transcription_text,
             'description': description_result['description']
         }
     finally:
-        # Clear folders after script execution, regardless of the result
+        # Clear folders after script execution
         clear_folders()
 
     return jsonify(response)
