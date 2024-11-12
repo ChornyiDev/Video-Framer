@@ -209,14 +209,16 @@ def upload_video():
             return jsonify({
                 'status': 'Processed with limitations',
                 'description': f'Video duration ({duration:.1f}s) is less than minimum required duration ({min_duration}s)',
-                'transcription': transcription_text
+                'transcription': transcription_text,
+                'transcription_word_count': word_count
             })
 
         if word_count < min_words:
             return jsonify({
                 'status': 'Processed with limitations',
                 'description': f'Transcription word count ({word_count}) is less than minimum required words ({min_words})',
-                'transcription': transcription_text
+                'transcription': transcription_text,
+                'transcription_word_count': word_count
             })
 
         # Get video description using OpenAI only if all conditions are met
@@ -227,6 +229,7 @@ def upload_video():
         response = {
             'status': 'Processed successfully',
             'transcription': transcription_text,
+            'transcription_word_count': word_count,
             'description': description_result['description']
         }
     finally:
