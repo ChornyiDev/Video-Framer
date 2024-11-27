@@ -1,6 +1,5 @@
 # Video Processing API - Documentation
 
-
 ## Overview
 
 This API allows you to process video files by extracting frames, audio, and generating descriptive content based on the frames and audio using OpenAI. It is implemented using Flask, and makes use of external tools such as `ffmpeg` for processing video files.
